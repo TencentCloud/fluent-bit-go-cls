@@ -4,7 +4,7 @@ go 1.19
 
 require (
 	github.com/fluent/fluent-bit-go v0.0.0-20230515084116-b93d969da46d
-	github.com/tencentcloud/tencentcloud-cls-sdk-go v1.0.4
+	github.com/tencentcloud/tencentcloud-cls-sdk-go v1.0.7
 )
 
 require (
