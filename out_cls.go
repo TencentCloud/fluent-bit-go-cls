@@ -2,11 +2,13 @@ package main
 
 import "C"
 import (
+	"encoding/json"
 	"fmt"
-	"github.com/fluent/fluent-bit-go/output"
-	cls "github.com/tencentcloud/tencentcloud-cls-sdk-go"
 	"time"
 	"unsafe"
+
+	"github.com/fluent/fluent-bit-go/output"
+	cls "github.com/tencentcloud/tencentcloud-cls-sdk-go"
 )
 
 var ProducerInstance *cls.AsyncProducerClient
@@ -75,6 +77,38 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, _ *C.char) int {
 				contents[k] = t
 			case []byte:
 				contents[k] = string(t)
+			case map[interface{}]interface{}:
+				if k == "kubernetes" {
+					// 转换为 map[string]interface{}
+					stringMap := make(map[string]string)
+					for key, value := range t {
+						strKey := fmt.Sprintf("%v", key)
+						switch tv := value.(type) {
+						case string:
+							stringMap[strKey] = tv
+						case []byte:
+							stringMap[strKey] = string(tv)
+						default:
+							strValue := fmt.Sprintf("%v", tv)
+							stringMap[strKey] = strValue
+						}
+					}
+					val, _ := json.Marshal(stringMap)
+					contents[k] = string(val)
+				} else {
+					// 转换为 map[string]interface{}
+					stringMap := make(map[string]interface{})
+					for key, value := range t {
+						strKey := fmt.Sprintf("%v", key)
+						stringMap[strKey] = value
+					}
+					val, _ := json.Marshal(stringMap)
+					contents[k] = string(val)
+				}
+
+			case []interface{}:
+				val, _ := json.Marshal(t)
+				contents[k] = string(val)
 			default:
 				contents[k] = fmt.Sprintf("%v", v)
 			}
