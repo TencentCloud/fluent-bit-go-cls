@@ -43,17 +43,17 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 	}
 	// 异步发送程序，需要启动
 	producerInstance.Start()
-	
+
 	// Create plugin context with instance-specific data
 	pluginContext := &PluginContext{
 		ProducerInstance: producerInstance,
 		TopicId:          topicId,
 		callBack:         &Callback{},
 	}
-	
+
 	// Store context in plugin instance
 	output.FLBPluginSetContext(plugin, pluginContext)
-	
+
 	fmt.Printf("[info] cls log producer init success for topic: %s\n", topicId)
 	return output.FLB_OK
 }
@@ -66,13 +66,13 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, _ *C.char) int {
 		fmt.Printf("[error] cls log producer context is nil \n")
 		return output.FLB_ERROR
 	}
-	
+
 	pluginContext, ok := pluginContextInterface.(*PluginContext)
 	if !ok || pluginContext.ProducerInstance == nil {
 		fmt.Printf("[error] cls log producer is nil or invalid context \n")
 		return output.FLB_ERROR
 	}
-	
+
 	logs := make([]*cls.Log, 0)
 	dec := output.NewDecoder(data, int(length))
 	for {
@@ -100,35 +100,25 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, _ *C.char) int {
 			case []byte:
 				contents[k] = string(t)
 			case map[interface{}]interface{}:
-				if k == "kubernetes" {
-					// 转换为 map[string]interface{}
-					stringMap := make(map[string]string)
-					for key, value := range t {
-						strKey := fmt.Sprintf("%v", key)
-						switch tv := value.(type) {
-						case string:
-							stringMap[strKey] = tv
-						case []byte:
-							stringMap[strKey] = string(tv)
-						default:
-							strValue := fmt.Sprintf("%v", tv)
-							stringMap[strKey] = strValue
-						}
+				// 统一处理所有map类型，避免JSON序列化
+				stringMap := make(map[string]string)
+				for key, value := range t {
+					strKey := fmt.Sprintf("%v", key)
+					switch tv := value.(type) {
+					case string:
+						stringMap[strKey] = tv
+					case []byte:
+						stringMap[strKey] = string(tv)
+					default:
+						strValue := fmt.Sprintf("%v", tv)
+						stringMap[strKey] = strValue
 					}
-					val, _ := json.Marshal(stringMap)
-					contents[k] = string(val)
-				} else {
-					// 转换为 map[string]interface{}
-					stringMap := make(map[string]interface{})
-					for key, value := range t {
-						strKey := fmt.Sprintf("%v", key)
-						stringMap[strKey] = value
-					}
-					val, _ := json.Marshal(stringMap)
-					contents[k] = string(val)
 				}
-
+				// 将map转换为JSON字符串
+				val, _ := json.Marshal(stringMap)
+				contents[k] = string(val)
 			case []interface{}:
+				// 将数组转换为JSON字符串
 				val, _ := json.Marshal(t)
 				contents[k] = string(val)
 			default:
