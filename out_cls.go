@@ -4,6 +4,7 @@ import "C"
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"time"
 	"unsafe"
 
@@ -48,7 +49,7 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 	pluginContext := &PluginContext{
 		ProducerInstance: producerInstance,
 		TopicId:          topicId,
-		callBack:         &Callback{},
+		callBack:         &Callback{TopicId: topicId},
 	}
 
 	// Store context in plugin instance
@@ -93,37 +94,7 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, _ *C.char) int {
 
 		contents := make(map[string]string, len(record))
 		for k, v := range record {
-			k, _ := k.(string)
-			switch t := v.(type) {
-			case string:
-				contents[k] = t
-			case []byte:
-				contents[k] = string(t)
-			case map[interface{}]interface{}:
-				// 统一处理所有map类型，避免JSON序列化
-				stringMap := make(map[string]string)
-				for key, value := range t {
-					strKey := fmt.Sprintf("%v", key)
-					switch tv := value.(type) {
-					case string:
-						stringMap[strKey] = tv
-					case []byte:
-						stringMap[strKey] = string(tv)
-					default:
-						strValue := fmt.Sprintf("%v", tv)
-						stringMap[strKey] = strValue
-					}
-				}
-				// 将map转换为JSON字符串
-				val, _ := json.Marshal(stringMap)
-				contents[k] = string(val)
-			case []interface{}:
-				// 将数组转换为JSON字符串
-				val, _ := json.Marshal(t)
-				contents[k] = string(val)
-			default:
-				contents[k] = fmt.Sprintf("%v", v)
-			}
+			contents[stringifyKey(k)] = stringifyValue(v)
 		}
 
 		if len(contents) == 0 {
@@ -137,8 +108,8 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, _ *C.char) int {
 	}
 	err := pluginContext.ProducerInstance.SendLogList(pluginContext.TopicId, logs, pluginContext.callBack)
 	if err != nil {
-		fmt.Printf("[error] cls log produce [%s] putlogs fail,, err: %s\n", pluginContext.TopicId, err.Error())
-		return output.FLB_ERROR
+		fmt.Printf("[error] cls log produce [%s] putlogs fail, err: %s\n", pluginContext.TopicId, err.Error())
+		return output.FLB_RETRY
 	}
 	// output.FLB_OK    = The data have been processed normally.
 	// output.FLB_ERROR = An internal error have ocurred, the plugin will not handle the set of records/data again.
@@ -151,18 +122,115 @@ func FLBPluginExit() int {
 	return output.FLB_OK
 }
 
+//export FLBPluginExitCtx
+func FLBPluginExitCtx(ctx unsafe.Pointer) int {
+	pluginContextInterface := output.FLBPluginGetContext(ctx)
+	if pluginContextInterface == nil {
+		return output.FLB_OK
+	}
+
+	pluginContext, ok := pluginContextInterface.(*PluginContext)
+	if !ok || pluginContext.ProducerInstance == nil {
+		return output.FLB_OK
+	}
+
+	// 等待异步producer发送完缓冲区中的日志
+	if err := pluginContext.ProducerInstance.Close(30000); err != nil {
+		fmt.Printf("[error] cls log producer close failed for topic [%s], err: %s\n", pluginContext.TopicId, err.Error())
+		return output.FLB_ERROR
+	}
+
+	fmt.Printf("[info] cls log producer closed for topic: %s\n", pluginContext.TopicId)
+	return output.FLB_OK
+}
+
 type Callback struct {
+	TopicId string
 }
 
 func (callback *Callback) Success(_ *cls.Result) {
 }
 
 func (callback *Callback) Fail(result *cls.Result) {
-	// Note: Callback is now instance-specific, but we don't have access to plugin context here
-	// This is a limitation of the CLS SDK callback interface
-	fmt.Printf("[error] cls log produce putlogs fail, request_id:[%s]. attempts: [%d], err: %s\n",
-		result.GetRequestId(), result.GetReservedAttempts(), result.GetErrorMessage())
+	fmt.Printf("[error] cls log produce [%s] putlogs fail, request_id:[%s]. attempts: [%+v], err: %s\n",
+		callback.TopicId, result.GetRequestId(), result.GetReservedAttempts(), result.GetErrorMessage())
 }
 
 func main() {
+}
+
+func stringifyKey(key interface{}) string {
+	switch k := key.(type) {
+	case string:
+		return k
+	case []byte:
+		return string(k)
+	default:
+		return fmt.Sprintf("%v", key)
+	}
+}
+
+func stringifyValue(value interface{}) string {
+	switch v := value.(type) {
+	case string:
+		return v
+	case []byte:
+		return string(v)
+	}
+
+	if !isStructuredValue(value) {
+		return fmt.Sprintf("%v", value)
+	}
+
+	data, err := json.Marshal(normalizeJSONValue(value))
+	if err != nil {
+		return fmt.Sprintf("%v", value)
+	}
+	return string(data)
+}
+
+func isStructuredValue(value interface{}) bool {
+	if value == nil {
+		return false
+	}
+
+	valueType := reflect.TypeOf(value)
+	switch valueType.Kind() {
+	case reflect.Map:
+		return true
+	case reflect.Slice, reflect.Array:
+		return valueType.Elem().Kind() != reflect.Uint8
+	default:
+		return false
+	}
+}
+
+func normalizeJSONValue(value interface{}) interface{} {
+	switch v := value.(type) {
+	case nil:
+		return nil
+	case string:
+		return v
+	case []byte:
+		return string(v)
+	}
+
+	valueRef := reflect.ValueOf(value)
+	switch valueRef.Kind() {
+	case reflect.Map:
+		out := make(map[string]interface{}, valueRef.Len())
+		iter := valueRef.MapRange()
+		for iter.Next() {
+			out[stringifyKey(iter.Key().Interface())] = normalizeJSONValue(iter.Value().Interface())
+		}
+		return out
+	case reflect.Slice, reflect.Array:
+		out := make([]interface{}, valueRef.Len())
+		for i := 0; i < valueRef.Len(); i++ {
+			out[i] = normalizeJSONValue(valueRef.Index(i).Interface())
+		}
+		return out
+	default:
+		return value
+	}
 }
