@@ -22,6 +22,6 @@ fluent-bit -c example/fluent.conf -e fluent-bit-go.so
         Match            *
         TopicID          YOUR_TOPIC_ID
         CLSEndPoint      YOUR_ENDPOINT
-        AccessKeyID      YOUR_PROJECT_SK
-        AccessKeySecret  YOUR_PROJECT_AK
+        AccessKeyID      YOUR_PROJECT_AK
+        AccessKeySecret  YOUR_PROJECT_SK
 ```
