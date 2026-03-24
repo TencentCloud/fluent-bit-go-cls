@@ -108,8 +108,8 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, _ *C.char) int {
 	}
 	err := pluginContext.ProducerInstance.SendLogList(pluginContext.TopicId, logs, pluginContext.callBack)
 	if err != nil {
-		fmt.Printf("[error] cls log produce [%s] putlogs fail,, err: %s\n", pluginContext.TopicId, err.Error())
-		return output.FLB_ERROR
+		fmt.Printf("[error] cls log produce [%s] putlogs fail, err: %s\n", pluginContext.TopicId, err.Error())
+		return output.FLB_RETRY
 	}
 	// output.FLB_OK    = The data have been processed normally.
 	// output.FLB_ERROR = An internal error have ocurred, the plugin will not handle the set of records/data again.
@@ -119,6 +119,28 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, _ *C.char) int {
 
 //export FLBPluginExit
 func FLBPluginExit() int {
+	return output.FLB_OK
+}
+
+//export FLBPluginExitCtx
+func FLBPluginExitCtx(ctx unsafe.Pointer) int {
+	pluginContextInterface := output.FLBPluginGetContext(ctx)
+	if pluginContextInterface == nil {
+		return output.FLB_OK
+	}
+
+	pluginContext, ok := pluginContextInterface.(*PluginContext)
+	if !ok || pluginContext.ProducerInstance == nil {
+		return output.FLB_OK
+	}
+
+	// 等待异步producer发送完缓冲区中的日志
+	if err := pluginContext.ProducerInstance.Close(30000); err != nil {
+		fmt.Printf("[error] cls log producer close failed for topic [%s], err: %s\n", pluginContext.TopicId, err.Error())
+		return output.FLB_ERROR
+	}
+
+	fmt.Printf("[info] cls log producer closed for topic: %s\n", pluginContext.TopicId)
 	return output.FLB_OK
 }
 
