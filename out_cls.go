@@ -4,6 +4,7 @@ import "C"
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"reflect"
 	"time"
 	"unsafe"
@@ -81,14 +82,9 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, _ *C.char) int {
 		if ret != 0 {
 			break
 		}
-		var logTime time.Time
-		switch t := ts.(type) {
-		case output.FLBTime:
-			logTime = ts.(output.FLBTime).Time
-		case uint64:
-			logTime = time.Unix(int64(t), 0)
-		default:
-			fmt.Println("[warn] unknown timestamp format.")
+		logTime, ok := extractLogTime(ts)
+		if !ok {
+			fmt.Printf("[warn] unknown timestamp format: %T\n", ts)
 			logTime = time.Now()
 		}
 
@@ -157,6 +153,64 @@ func (callback *Callback) Fail(result *cls.Result) {
 }
 
 func main() {
+}
+
+func extractLogTime(ts interface{}) (time.Time, bool) {
+	switch t := ts.(type) {
+	case output.FLBTime:
+		return t.Time, true
+	case time.Time:
+		return t, true
+	case []interface{}:
+		if len(t) == 0 {
+			return time.Time{}, false
+		}
+		return extractLogTime(t[0])
+	case int:
+		return time.Unix(int64(t), 0), true
+	case int8:
+		return time.Unix(int64(t), 0), true
+	case int16:
+		return time.Unix(int64(t), 0), true
+	case int32:
+		return time.Unix(int64(t), 0), true
+	case int64:
+		return time.Unix(t, 0), true
+	case uint:
+		if uint64(t) > math.MaxInt64 {
+			return time.Time{}, false
+		}
+		return time.Unix(int64(t), 0), true
+	case uint8:
+		return time.Unix(int64(t), 0), true
+	case uint16:
+		return time.Unix(int64(t), 0), true
+	case uint32:
+		return time.Unix(int64(t), 0), true
+	case uint64:
+		if t > math.MaxInt64 {
+			return time.Time{}, false
+		}
+		return time.Unix(int64(t), 0), true
+	case float32:
+		return unixFloatTime(float64(t))
+	case float64:
+		return unixFloatTime(t)
+	default:
+		return time.Time{}, false
+	}
+}
+
+func unixFloatTime(epochSeconds float64) (time.Time, bool) {
+	if math.IsNaN(epochSeconds) || math.IsInf(epochSeconds, 0) {
+		return time.Time{}, false
+	}
+
+	seconds, fraction := math.Modf(epochSeconds)
+	if seconds >= 1<<63 || seconds < math.MinInt64 {
+		return time.Time{}, false
+	}
+	return time.Unix(int64(seconds), int64(fraction*1e9)), true
 }
 
 func stringifyKey(key interface{}) string {
